@@ -4,8 +4,6 @@
   <meta charset="UTF-8" />
   <title>Gemma 3 270M Chat (WebGPU)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-  <!-- あなたのCSSをここに貼ってOK -->
   <style>
     body {
       margin: 0;
@@ -36,11 +34,15 @@
       border: none;
     }
 
+    .download-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
     .progress-container {
       width: 100%;
       background: #333;
       height: 8px;
-      margin-top: 6px;
       border-radius: 4px;
       overflow: hidden;
       display: none;
@@ -50,7 +52,7 @@
       width: 0%;
       height: 100%;
       background: #4a8fff;
-      transition: width 0.2s;
+      transition: width 0.1s;
     }
 
     .chat-container {
@@ -128,9 +130,8 @@
       color: #aaa;
     }
   </style>
-
-  <!-- WebLLM CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/dist/index.min.js"></script>
+  <!-- 最新のWebLLM CDN -->
+  <script src="https://jsdelivr.net"></script>
 </head>
 <body>
 
@@ -152,7 +153,7 @@
   <div class="status-bar" id="status">モデル未ダウンロード</div>
 
   <div class="input-area">
-    <textarea id="input" placeholder="メッセージを入力して Enter で送信"></textarea>
+    <textarea id="input" placeholder="メッセージを入力して Enter で送信" disabled></textarea>
     <button id="sendBtn" disabled>送信</button>
   </div>
 
@@ -166,8 +167,22 @@
     const progressContainer = document.getElementById("progressContainer");
     const progressBar = document.getElementById("progressBar");
 
-    let model = null;
-    let modelReady = false;
+    let engine = null;
+    const chatHistory = [];
+
+    // 1. Gemma 3 270M 用のカスタムモデルIDを設定
+    const MODEL_ID = "gemma-3-270m-ja"; 
+
+    // 2. WebLLM公式のプリセットにないため、Hugging Faceの外部URLを指定する設定を作成
+    const myAppConfig = {
+      model_list: [
+        {
+          model: "https://huggingface.co/UMASHIKA/gemma3-270m-japanese-webllm-03",
+          model_id: MODEL_ID,
+          model_lib: "https://huggingface.co"
+        }
+      ]
+    };
 
     function appendMessage(role, content) {
       const div = document.createElement("div");
@@ -175,6 +190,7 @@
       div.textContent = content;
       chatEl.appendChild(div);
       chatEl.scrollTop = chatEl.scrollHeight;
+      return div;
     }
 
     function setStatus(text) {
@@ -182,50 +198,80 @@
     }
 
     // ============================
-    // モデルダウンロード
+    // モデルダウンロード & 初期化
     // ============================
     downloadBtn.addEventListener("click", async () => {
       downloadBtn.disabled = true;
-      setStatus("モデルをダウンロード中…");
+      setStatus("Gemma 3 270M をダウンロード中…");
       progressContainer.style.display = "block";
 
-      model = new webllm.ChatModule();
+      try {
+        // appConfig オプションを渡し、外部のGemma 3 270Mモデルを強制的に読み込む
+        engine = await webllm.CreateMLCEngine(MODEL_ID, {
+          appConfig: myAppConfig,
+          initProgressCallback: (report) => {
+            const percent = Math.floor(report.progress * 100);
+            progressBar.style.width = percent + "%";
+            setStatus(`初期化中: ${report.text}`);
+          }
+        });
 
-      await model.reload("gemma-2-2b-it-q4f16_1", {
-        onProgress: (progress) => {
-          const percent = Math.floor(progress * 100);
-          progressBar.style.width = percent + "%";
-        }
-      });
-
-      modelReady = true;
-      progressContainer.style.display = "none";
-      sendBtn.disabled = false;
-      setStatus("モデル準備完了");
-      appendMessage("system", "モデルの読み込みが完了しました。会話できます！");
+        progressContainer.style.display = "none";
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+        setStatus("Gemma 3 270M 準備完了");
+        appendMessage("system", "Gemma 3 270M の読み込みが完了しました！完全にローカルのブラウザ上で動作しています。");
+      } catch (error) {
+        setStatus("エラーが発生しました");
+        appendMessage("system", `エラー: ${error.message}\nお使いのブラウザがWebGPUに対応しているか確認してください。`);
+        downloadBtn.disabled = false;
+      }
     });
 
     // ============================
     // メッセージ送信
     // ============================
     async function sendMessage() {
-      if (!modelReady) {
-        appendMessage("assistant", "モデルがまだ読み込まれていません。");
-        return;
-      }
+      if (!engine) return;
 
       const text = inputEl.value.trim();
       if (!text) return;
 
       appendMessage("user", text);
       inputEl.value = "";
+      
+      sendBtn.disabled = true;
+      inputEl.disabled = true;
+      setStatus("Gemma 3 思考中…");
 
-      setStatus("Gemma 3 270M に送信中…");
+      chatHistory.push({ role: "user", content: text });
+      const assistantMessageDiv = appendMessage("assistant", "");
 
-      const reply = await model.generate(text);
-      appendMessage("assistant", reply);
+      try {
+        const completion = await engine.chat.completions.create({
+          messages: chatHistory,
+          stream: true,
+        });
 
-      setStatus("完了");
+        let fullReply = "";
+        for await (const chunk of completion) {
+          const curDelta = chunk.choices.delta.content || "";
+          fullReply += curDelta;
+          assistantMessageDiv.textContent = fullReply;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+
+        chatHistory.push({ role: "assistant", content: fullReply });
+        setStatus("完了");
+
+      } catch (error) {
+        setStatus("生成エラー");
+        assistantMessageDiv.textContent = `エラーが発生しました: ${error.message}`;
+      } finally {
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+        inputEl.focus();
+      }
     }
 
     sendBtn.addEventListener("click", sendMessage);
