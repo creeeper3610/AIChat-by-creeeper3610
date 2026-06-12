@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Gemma 3 270M Chat (WebGPU)</title>
+  <title>Gemma 3 270M Chat (WebGPU - 一時キャッシュ版)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -146,7 +146,7 @@
 
   <main id="chat" class="chat-container">
     <div class="message system" id="systemMsg">
-      Gemma 3 270M をダウンロードすると会話できます。
+      Gemma 3 270M を一時キャッシュにダウンロードします。（※タブを閉じると自動削除されます）
     </div>
   </main>
 
@@ -198,12 +198,43 @@
     // WebGPUがブラウザでサポートされているか事前にチェック
     if (!navigator.gpu) {
       setStatus("警告: お使いのブラウザはWebGPU非対応です");
-      appendMessage("system", "エラー: このブラウザまたは端末はWebGPUに対応していません。Google Chromeの最新版などでお試しください。");
-      downloadBtn.disabled = true;
+      appendMessage("system", "エラー: このブラウザまたは端末はWebGPUに対応していません。\nChromeの「設定」→「システム」→「ハードウェア アクセラレーション」がオンになっているか確認してください。");
     }
 
     // ============================
-    // ボタンを押したら即座にダウンロード開始
+    // 【重要】退出時にキャッシュとIndexedDBを強制削除する関数
+    // ============================
+    async function clearModelCache() {
+      setStatus("一時キャッシュを削除中...");
+      try {
+        // 1. WebLLMが使用するCache Storageを全て削除
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          for (const key of keys) {
+            await caches.delete(key);
+          }
+        }
+        // 2. WebLLMが使用するIndexedDB（モデルデータ保存領域）を強制削除
+        if ('indexedDB' in window) {
+          indexedDB.deleteDatabase("webllm/config");
+          indexedDB.deleteDatabase("webllm/model");
+          // Wasm等のキャッシュ用DB（MLC関連）
+          indexedDB.deleteDatabase("https://huggingface.co"); 
+        }
+        console.log("Cache cleared successfully.");
+      } catch (e) {
+        console.error("Failed to clear cache:", e);
+      }
+    }
+
+    // タブを閉じる、またはリロードした瞬間にキャッシュを消去
+    window.addEventListener("unload", () => {
+      // 退出時の同期的な一瞬の隙に削除を実行
+      clearModelCache();
+    });
+
+    // ============================
+    // ボタンを押したらダウンロード開始
     // ============================
     downloadBtn.addEventListener("click", async () => {
       downloadBtn.disabled = true;
@@ -211,27 +242,27 @@
       progressContainer.style.display = "block";
 
       try {
-        // ここで通信と初期化が同時にスタート
         engine = await webllm.CreateMLCEngine(MODEL_ID, {
           appConfig: myAppConfig,
           initProgressCallback: (report) => {
             const percent = Math.floor(report.progress * 100);
             progressBar.style.width = percent + "%";
-            setStatus(`ダウンロード/初期化中: ${percent}% - ${report.text}`);
+            setStatus(`ダウンロード中: ${percent}% - ${report.text}`);
           }
         });
 
-        // style.style を style.display に修正
         progressContainer.style.display = "none";
         sendBtn.disabled = false;
         inputEl.disabled = false;
         setStatus("Gemma 3 270M 準備完了");
-        appendMessage("system", "Gemma 3 270M の読み込みが完了しました！チャット可能です。");
+        appendMessage("system", "Gemma 3 270M の読み込みが完了しました！\n※このタブを閉じると、ダウンロードされたモデルデータは自動的にPCから削除されます。");
       } catch (error) {
         setStatus("エラーにより停止しました");
-        appendMessage("system", `【致命的エラー】\n${error.message}\n\n※通信ブロック、またはWebGPUの初期化に失敗しました。`);
+        appendMessage("system", `【エラー詳細】\n${error.message}\n\nWebGPUの初期化に失敗しました。グラフィックドライバーの更新や、ブラウザのハードウェアアクセラレーション設定を見直してください。`);
         downloadBtn.disabled = false;
         progressContainer.style.display = "none";
+        // エラーで止まった場合も念のためキャッシュを掃除
+        clearModelCache();
       }
     });
 
