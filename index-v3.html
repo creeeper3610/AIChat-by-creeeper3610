@@ -145,7 +145,7 @@
   </div>
 
   <main id="chat" class="chat-container">
-    <div class="message system">
+    <div class="message system" id="systemMsg">
       Gemma 3 270M をダウンロードすると会話できます。
     </div>
   </main>
@@ -170,16 +170,14 @@
     let engine = null;
     const chatHistory = [];
 
-    // 1. Gemma 3 270M 用のカスタムモデルIDを設定
+    // Gemma 3 270M用設定
     const MODEL_ID = "gemma-3-270m-ja"; 
-
-    // 2. WebLLM公式のプリセットにないため、Hugging Faceの外部URLを指定する設定を作成
     const myAppConfig = {
       model_list: [
         {
-          model: "https://huggingface.co/UMASHIKA/gemma3-270m-japanese-webllm-03",
+          model: "https://huggingface.co",
           model_id: MODEL_ID,
-          model_lib: "https://huggingface.co"
+          model_lib: "https://huggingface.co/resolve/main/gemma3-270m-japanese-q4f32_1-ctx4k-webgpu.wasm"
         }
       ]
     };
@@ -197,8 +195,15 @@
       statusEl.textContent = text;
     }
 
+    // WebGPUがブラウザでサポートされているか事前にチェック
+    if (!navigator.gpu) {
+      setStatus("警告: お使いのブラウザはWebGPU非対応です");
+      appendMessage("system", "エラー: このブラウザまたは端末はWebGPUに対応していません。Google Chromeの最新版などでお試しください。");
+      downloadBtn.disabled = true;
+    }
+
     // ============================
-    // モデルダウンロード & 初期化
+    // ボタンを押したら即座にダウンロード開始
     // ============================
     downloadBtn.addEventListener("click", async () => {
       downloadBtn.disabled = true;
@@ -206,25 +211,27 @@
       progressContainer.style.display = "block";
 
       try {
-        // appConfig オプションを渡し、外部のGemma 3 270Mモデルを強制的に読み込む
+        // ここで通信と初期化が同時にスタート
         engine = await webllm.CreateMLCEngine(MODEL_ID, {
           appConfig: myAppConfig,
           initProgressCallback: (report) => {
             const percent = Math.floor(report.progress * 100);
             progressBar.style.width = percent + "%";
-            setStatus(`初期化中: ${report.text}`);
+            setStatus(`ダウンロード/初期化中: ${percent}% - ${report.text}`);
           }
         });
 
+        // style.style を style.display に修正
         progressContainer.style.display = "none";
         sendBtn.disabled = false;
         inputEl.disabled = false;
         setStatus("Gemma 3 270M 準備完了");
-        appendMessage("system", "Gemma 3 270M の読み込みが完了しました！完全にローカルのブラウザ上で動作しています。");
+        appendMessage("system", "Gemma 3 270M の読み込みが完了しました！チャット可能です。");
       } catch (error) {
-        setStatus("エラーが発生しました");
-        appendMessage("system", `エラー: ${error.message}\nお使いのブラウザがWebGPUに対応しているか確認してください。`);
+        setStatus("エラーにより停止しました");
+        appendMessage("system", `【致命的エラー】\n${error.message}\n\n※通信ブロック、またはWebGPUの初期化に失敗しました。`);
         downloadBtn.disabled = false;
+        progressContainer.style.display = "none";
       }
     });
 
